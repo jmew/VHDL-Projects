@@ -1,0 +1,306 @@
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+--
+-- 7-segment display driver. It displays a 4-bit number on 7-segments 
+-- This is created as an entity so that it can be reused many times easily
+--
+
+ENTITY SevenSegment IS PORT (
+   
+   dataIn      :  IN  std_logic_vector(3 DOWNTO 0);   -- The 4 bit data to be displayed
+   blanking    :  IN  std_logic;                      -- This bit turns off all segments
+   
+   segmentsOut :  OUT std_logic_vector(6 DOWNTO 0)    -- 7-bit outputs to a 7-segment
+); 
+END SevenSegment;
+
+ARCHITECTURE Behavioral OF SevenSegment IS
+
+-- 
+-- The following statements convert a 4-bit input, called dataIn to a pattern of 7 bits
+-- The segment turns on when it is '0' otherwise '1'
+-- The blanking input is added to turns off the all segments
+--
+
+BEGIN
+
+   with blanking & dataIn SELECT --  gfedcba        b3210      -- D7S
+      segmentsOut(6 DOWNTO 0) <=    "1000000" WHEN "00000",    -- [0]
+                                    "1111001" WHEN "00001",    -- [1]
+                                    "0100100" WHEN "00010",    -- [2]      +---- a ----+
+                                    "0110000" WHEN "00011",    -- [3]      |           |
+                                    "0011001" WHEN "00100",    -- [4]      |           |
+                                    "0010010" WHEN "00101",    -- [5]      f           b
+                                    "0000010" WHEN "00110",    -- [6]      |           |
+                                    "1111000" WHEN "00111",    -- [7]      |           |
+                                    "0000000" WHEN "01000",    -- [8]      +---- g ----+
+                                    "0010000" WHEN "01001",    -- [9]      |           |
+                                    "0001000" WHEN "01010",    -- [A]      |           |
+                                    "0000011" WHEN "01011",    -- [b]      e           c
+                                    "0100111" WHEN "01100",    -- [c]      |           |
+                                    "0100001" WHEN "01101",    -- [d]      |           |
+                                    "0000110" WHEN "01110",    -- [E]      +---- d ----+
+                                    "0001110" WHEN "01111",    -- [F]
+                                    "1111111" WHEN OTHERS;     -- [ ]
+
+END Behavioral;
+
+--------------------------------------------------------------------------------
+-- Main entity
+--------------------------------------------------------------------------------
+
+LIBRARY ieee;
+USE ieee.std_logic_1164.ALL;
+USE ieee.numeric_std.ALL;
+
+ENTITY Lab5 IS
+   PORT(
+      
+      clock_50   : IN  STD_LOGIC;
+      sw         : IN  STD_LOGIC_VECTOR(17 DOWNTO 0); -- 18 dip switches on the board
+
+      ledr       : OUT STD_LOGIC_VECTOR(17 DOWNTO 0); -- LEDs, many Red ones are available
+      ledg       : OUT STD_LOGIC_VECTOR( 8 DOWNTO 0); -- LEDs, many Green ones are available
+      hex0, hex2, hex4, hex6 : OUT STD_LOGIC_VECTOR( 6 DOWNTO 0)  -- seven segments to display numbers
+);
+END Lab5;
+
+ARCHITECTURE SimpleCircuit OF Lab5 IS
+
+--
+-- In order to use the "SevenSegment" entity, we should declare it with first
+-- 
+
+   COMPONENT SevenSegment PORT(        -- Declare the 7 segment component to be used
+      dataIn      : IN  STD_LOGIC_VECTOR(3 DOWNTO 0);
+      blanking    : IN  STD_LOGIC;
+      segmentsOut : OUT STD_LOGIC_VECTOR(6 DOWNTO 0)
+   );
+   END COMPONENT;
+----------------------------------------------------------------------------------------------------
+   CONSTANT CLK_DIV_SIZE: INTEGER := 25;     -- size of vectors for the counters
+
+   SIGNAL OneHzModCLK:  STD_LOGIC; -- modulus1 Hz clock
+   SIGNAL TenHzCLK: STD_LOGIC;
+
+   SIGNAL bin_counter:  UNSIGNED(CLK_DIV_SIZE-1 DOWNTO 0) := to_unsigned(0,CLK_DIV_SIZE); -- reset binary counter to zero
+   SIGNAL mod_counter:  UNSIGNED(CLK_DIV_SIZE-1 DOWNTO 0) := to_unsigned(0,CLK_DIV_SIZE); -- reset modulus counter to zero
+   SIGNAL tenHZ_mod_counter:  UNSIGNED(CLK_DIV_SIZE-1 DOWNTO 0) := to_unsigned(0,CLK_DIV_SIZE); -- reset modulus counter to zero
+   
+   TYPE STATES IS (STATE0, STATE1);   -- list all the STATES
+   SIGNAL state, next_state, state_override:  STATES;     -- current and next state signals od type STATES
+   
+   SIGNAL state_number: STD_LOGIC_VECTOR(3 downto 0); -- binary state number to display on seven-segment
+
+   SIGNAL ns_wait_counter: UNSIGNED(3 DOWNTO 0);		
+   SIGNAL ew_wait_counter: UNSIGNED(3 DOWNTO 0);
+   
+   SIGNAL state_counter: UNSIGNED(3 DOWNTO 0);        -- binary state counter to display on seven-segment
+   
+   SIGNAL operation_mode: STD_LOGIC;
+   SIGNAL default_side: STD_LOGIC;
+   SIGNAL ns_car_sensor: STD_LOGIC; 
+   SIGNAL ew_car_sensor: STD_LOGIC; 
+   
+   SIGNAL state_switch_check: STD_LOGIC; --Used to see if the LEDG should flash or not. LEDG should only flash when it changes states
+   SIGNAL ew_wait_counter_check: STD_LOGIC; --If '1', start ew_wait_counter, If '0', reset counter
+   SIGNAL ns_wait_counter_check: STD_LOGIC;	--If '1', start ns_wait_counter, If '0', reset counter
+----------------------------------------------------------------------------------------------------
+
+BEGIN
+---------------------------------------------------------------------------------------------------- 
+   --TenHZCLK <= clock_50; 
+   TenHZModCLK: PROCESS(clock_50) 
+   BEGIN
+      IF (rising_edge(clock_50)) THEN -- modulus counter increments on rising clock edge
+         IF (tenHZ_mod_counter = "0001001100010010110011111") THEN       -- half period
+            TenHZCLK <= NOT TenHzCLK;                 -- toggle
+            tenHZ_mod_counter <= to_unsigned(0,CLK_DIV_SIZE); -- reset counter
+         ELSE
+            tenHZ_mod_counter <= tenHZ_mod_counter + 1;
+         END IF;
+      END IF;
+   END PROCESS;
+   
+   ModCLK: PROCESS(TenHZCLK) 
+   BEGIN
+      IF (rising_edge(TenHZCLK)) THEN -- modulus counter increments on rising clock edge
+         IF (mod_counter = 4) THEN       -- half period of 10
+            OneHzModCLK <= NOT OneHzModCLK;                 -- toggle
+            mod_counter <= to_unsigned(0,CLK_DIV_SIZE); -- reset counter
+         ELSE
+            mod_counter <= mod_counter + 1;
+         END IF;
+      END IF;
+   END PROCESS;
+----------------------------------------------------------------------------------------------------
+   FSM: PROCESS(state, state_counter, state_override, default_side) --North South Traffic Light   
+   BEGIN
+      next_state <= state;
+      ---------------------DEFAULT SIDE CHECK------------------------------
+      IF (sw(16) = '1' and ns_car_sensor = '0') THEN
+         --Checks to see if EW mode and only switches at the end of the state
+         state_override <= STATE1; --If EW mode, go directly to state2
+         default_side <= '1'; --Set default side to east west
+      ELSE
+		 state_override <= STATE0; --Default to NS mode
+		 default_side <= '0'; -- Set default side to north south
+      END IF;
+      --------------------OPERATION MODE CHECK------------------------------
+      IF (sw(17) = '1') THEN
+	     operation_mode <= '1'; --Night Mode
+	  ELSE 
+	     operation_mode <= '0'; --Day Mode
+	  END IF;
+      
+      CASE state IS
+         WHEN STATE0 =>
+			-------------------------NORTH SOUTH TRAFFIC LIGHT-----------------------
+            state_number <= "0000";
+            LEDR(11) <= '0'; --Turn off red LED11
+            LEDR(0) <= '1';	--Turn on red LED0
+            LEDG(7) <= '0'; --Turn off green LED7
+            ns_wait_counter_check <= '0'; --Turns off NS wait counter
+            --------------------EAST WEST CAR SENSOR CHECK---------------------------
+            IF (operation_mode = '1' and sw(14) = '0') THEN 
+			   --If it is night mode and there is no car at the intersection
+			   ew_car_sensor <= '0';
+			   ew_wait_counter_check <= '0';
+			ELSIF (operation_mode = '1' and sw(14) = '1') THEN 
+			   --If it is night mode and there is a car at the intersection
+			   ew_car_sensor <= '1';
+			   ew_wait_counter_check <= '1';
+			ELSE 
+			   ew_wait_counter_check <= '0';
+			END IF;
+			------------------------NORTH SOUTH CAR SENSOR CHECK---------------------
+			If (operation_mode = '1' and sw(15) = '0') THEN 
+			   ns_car_sensor <= '0';
+			ELSIF (operation_mode = '1' and sw(15) = '1') THEN 
+			   ns_car_sensor <= '1';
+			END IF;
+            ----------------------------TRAFFIC LIGHT--------------------------------
+            IF (state_counter >= "0000" and state_counter < "0010" and (state_switch_check = '1' or operation_mode = '0')) THEN	
+			   --If it is day mode or there is a car in night mode
+			   LEDG(8) <= TenHZCLK;
+			ELSIF (state_counter >= "0000" and state_counter < "0010" and (ew_car_sensor = '0' or operation_mode = '1')) THEN	
+			   --If it is night mode and there is no car
+			   LEDG(8) <= '1';
+            ELSIF (state_counter >= "0010" and state_counter < "0110") THEN	
+			   --If it is between 2 and 6 seconds
+			   LEDG(8) <= '1';
+			   state_switch_check <= '0';
+			ELSIF (state_counter >= "0110" and state_counter < "0111") THEN
+			   --If it is between 6 and 8 seconds
+			   LEDR(11) <= TenHZCLK;
+			   LEDG(8) <= '0';
+            ELSIF (state_counter = "0111" and (operation_mode = '0' or ew_car_sensor = '1' or ns_car_sensor = '1' or default_side = '1')) THEN 
+               --If it is day mode or if it is night mode and there is a car, go to the next state
+               LEDR(11) <= TenHZCLK;
+			   LEDG(8) <= '0';
+               next_state <= STATE1;
+               ew_wait_counter_check <= '0'; --DOOOO WEEE NEEEEED DIS???????????????
+               state_switch_check <= '1';
+            ELSE
+               --If it is night mode and there is no car, stay in the same state
+               LEDR(11) <= TenHZCLK;
+--			   LEDG(8) <= '0';
+			   next_state <= STATE0;
+			   state_switch_check <= '0';
+            END IF;
+         WHEN OTHERS => 
+			-------------------------EAST WEST TRAFFIC LIGHT-----------------------
+            state_number <= "0001";
+            LEDR(11) <= '1';
+            LEDR(0) <= '0';
+            LEDG(8) <= '0';	--Turn off green LED8
+            ew_wait_counter_check <= '0'; --Turns off EW wait counter
+            ----------------------NORTH SOUTH CAR SENSOR CHECK---------------------
+            IF (operation_mode = '1' and sw(15) = '0') THEN 
+			   --If it is night mode and there is no car detected
+			   ns_car_sensor <= '0';
+			   ns_wait_counter_check <= '0';
+			ELSIF (operation_mode = '1' and sw(15) = '1') THEN 
+			   --If it is night mode and there is a car detected
+			   ns_car_sensor <= '1';
+			   ns_wait_counter_check <= '1';
+			ELSE 
+			   ns_wait_counter_check <= '0';
+			END IF;
+			----------------------EAST WEST CAR SENSOR CHECK-----------------------
+			If (operation_mode = '1' and sw(14) = '0') THEN 
+			   ew_car_sensor <= '0';
+			ELSIF (operation_mode = '1' and sw(14) = '1') THEN 
+			   ew_car_sensor <= '1';
+			END IF;
+            --------------------------TRAFFIC LIGHT--------------------------------
+            IF (state_counter >= "0000" and state_counter < "0010" and (state_switch_check = '1' or operation_mode = '0')) THEN	
+			   --If it is day mode or there is a car in night mode
+			   LEDG(7) <= TenHZCLK;
+			ELSIF (state_counter >= "0000" and state_counter < "0010" and (ns_car_sensor = '0' or operation_mode = '1')) THEN	
+			   --If it is night mode and there is no car
+			   LEDG(7) <= '1';
+			ELSIF (state_counter >= "0010" and state_counter < "0110") THEN
+			   --If it is between 2 and 6 seconds
+			   LEDG(7) <= '1';
+			   state_switch_check <= '0';
+            ELSIF (state_counter >= "0110" and state_counter < "0111") THEN
+			   --If it is between 6 and 8 seconds
+			   LEDG(7) <= '0';
+			   LEDR(0) <= TenHZCLK;
+            ELSIF (state_counter = "0111" and (operation_mode = '0' or ns_car_sensor = '1' or ew_car_sensor = '1' or default_side = '0')) THEN
+               --If 
+               LEDG(7) <= '0';
+			   LEDR(0) <= TenHZCLK;
+               next_state <= STATE0;
+               ns_wait_counter_check <= '0'; --DOOOO WEEE NEEEEED DIS???????????????
+               state_switch_check <= '1';
+            ELSE
+               --If it is night mode and it is on the EW side, stay in this state
+--               LEDG(7) <= '0';
+			   LEDR(0) <= TenHZCLK;
+			   next_state <= STATE1;
+			   state_switch_check <= '0';
+            END IF;
+      END CASE;
+   END PROCESS;
+----------------------------------------------------------------------------------------------------
+   SeqLogic: PROCESS(OneHzModCLK, state, state_override, ew_wait_counter_check, ns_wait_counter_check) -- creats sequential logic to latch the state
+   BEGIN
+      IF (rising_edge(OneHzModCLK)) THEN
+         ----------------DEFAULT SIDE CHECK--------------------
+         IF (state_override = STATE1) THEN --If default side is EW, go directly to state 1
+			state <= state_override;                     
+         ELSE
+            state <= next_state;
+         END IF;
+         -----------------EW WAIT COUNTER---------------------
+         IF (ew_wait_counter_check = '1') THEN
+			ew_wait_counter <= ew_wait_counter + 1; --Increment ew wait counter
+	     ELSE
+            ew_wait_counter <= "0000"; --Reset Counter
+         END IF;
+         -----------------NS WAIT COUNTER---------------------
+         IF (ns_wait_counter_check = '1') THEN
+			ns_wait_counter <= ns_wait_counter + 1; --Increment ns wait counter
+	     ELSE
+            ns_wait_counter <= "0000"; --Reset Counter
+         END IF;
+         -----------------STATE COUNTER-----------------------
+		 IF (state_counter = "0111") THEN
+		    state_counter <= "0000";
+		 ELSE
+			state_counter <= state_counter + 1; -- on the rising edge of clock the current counter is incremented
+		 END IF;
+         
+      END IF;
+   END PROCESS;
+----------------------------------------------------------------------------------------------------
+   D7S0: SevenSegment PORT MAP( state_number, '0', hex0 );	--Displays the state number of the traffic light state machine on hex0
+   D7S2: SevenSegment PORT MAP( std_logic_vector(state_counter), '0', hex2 );	--Displays the state counter on hex2
+   D7S4: SevenSegment PORT MAP( std_logic_vector(ns_wait_counter), '0', hex4 );	--Displays the ns wait counter on hex4
+   D7S6: SevenSegment PORT MAP( std_logic_vector(ew_wait_counter), '0', hex6 );	--Displays the ew wait counter on hex6
+
+END SimpleCircuit;

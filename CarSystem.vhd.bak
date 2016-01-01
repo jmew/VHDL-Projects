@@ -1,0 +1,28 @@
+library ieee;
+use ieee.std_logic_1164.ALL;
+use ieee.numeric_std.ALL;
+
+-- This is the main circuit Entity, which connects all wires to the FPGA pins (lights and switches)
+-- First we have a PORT mapping - naming all wires going to the outside world and if they are INputs or OUTputs
+
+entity Lab1 is port(
+      
+      key   : in  std_logic_vector(2 downto 0); -- 0:Gas, 1:Clutch, 2:Brake
+      sw    : in  std_logic_vector(1 downto 1); -- Override
+
+      ledr  : out std_logic_vector(0 downto 0); -- Red LED (BrakeControl)
+      ledg  : out std_logic_vector(0 downto 0)  -- Green LED (GasControl)
+);
+end Lab1;
+
+architecture CarController of Lab1 is
+
+-- The function of Lab1 entity is defined here
+
+begin
+
+   ledg(0) <= key(2) and key(1) and not sw(1) and not key(0); -- Whenever "Gas" Key(0) is pressed and "Clutch" Key(1) is not pressed  and "Brake" Key(2) is not pressed and the Override switch Sw(1) is off, "Gas Control" ledg(0) turns on.
+   
+   ledr(0) <= sw(1) or not key(2); -- Whenever the "Brake" is pressed or the "Override" switch Sw(1) is on, the "BrakeControl" ledr(0) turns on.
+
+end CarController;
